@@ -1,0 +1,9 @@
+# Python sanal ortam ve derleme dosyaları
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Proje veri ve gizlilik dosyaları
+*.json
+.env
