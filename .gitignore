@@ -1,9 +1,13 @@
-# Python sanal ortam ve derleme dosyaları
+<<<<<<< HEAD
+# Python sanal ortam ve derleme dosyalari
 __pycache__/
 *.pyc
 .venv/
 venv/
 
-# Proje veri ve gizlilik dosyaları
+# Proje veri ve gizlilik dosyalari
 *.json
 .env
+=======
+.idea/
+>>>>>>> 93ad01d (ilk versiyonum: temel pyhton kodum mevcut henuz json dosyasina veri kaydediliyor OOP tabanli argparse sistemli CLI Format expense-tracker system v1)
