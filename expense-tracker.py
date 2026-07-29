@@ -3,18 +3,20 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import sys
 import psycopg2
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
 
 class DatabaseManager:
     def __init__(self):
         self.config = {
-            "dbname": "expense_db",
-            "user": "postgres",
-            "password": "579405",
-            "host": "localhost",
-            "port": "5432",
+            "dbname": os.getenv("DB_NAME", "expense_db"),
+            "user": os.getenv("DB_USER", "postgres"),
+            "password": os.getenv("DB_PASSWORD"),
+            "host": os.getenv("DB_HOST", "localhost"),
+            "port": os.getenv("DB_PORT", "5432"),
         }
-
     def get_connection(self):
         return psycopg2.connect(**self.config)
 
