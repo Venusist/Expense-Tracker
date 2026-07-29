@@ -19,7 +19,6 @@ The project was initially built with JSON-based storage and later migrated to Po
 * Python 3
 * PostgreSQL
 * psycopg2-binary
-* bcrypt
 * argparse
 
 ## Project Architecture
