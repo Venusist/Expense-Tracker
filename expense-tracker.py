@@ -1,215 +1,182 @@
-from datetime import datetime
-from decimal import Decimal ,InvalidOperation
-import json
 import argparse
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 import sys
+import psycopg2
 
 
-class Expense:
-    def __init__(self, id:int, amount:Decimal, description:str, date:str=None):
-        self.id = id
-        self.amount = amount
-        self.description = description
-        self.date = date if date else datetime.now().strftime("%Y-%m-%d")
-        #eğer dışarıdan tarih gelmezse bugünün tarihini yazar
-
-    def to_dict(self): #verileri JSON'a yazılabilir bir dictionarya çevir
-        return {
-            "id": self.id,
-            "amount": str(self.amount), #decimal nesneleri str çevir çünkü JSON
-            "description": self.description,
-            "date": self.date
+class DatabaseManager:
+    def __init__(self):
+        self.config = {
+            "dbname": "expense_db",
+            "user": "postgres",
+            "password": "579405",
+            "host": "localhost",
+            "port": "5432",
         }
 
-    def __str__(self):
-        return f"{self.description} (${self.amount})"
+    def get_connection(self):
+        return psycopg2.connect(**self.config)
+
 
 class ExpenseManager:
-    def __init__(self, file_path: str = "expenses.json"):
-        self.file_path = file_path
-        self.all_expenses = [] #expenseleri burda listede tutulur
-        self._load_data() #sınıf başlayınca eski veriler de yüklenir
-
-    def _load_data(self):
-        try:
-            with open(self.file_path, "r", encoding="utf-8") as file:
-                raw_data = json.load(file)
-                self.all_expenses = []
-
-                for item in raw_data:
-                    expense_object = Expense(
-                        id=int(item["id"]),
-                        amount=Decimal(item["amount"]),# Metni tekrar Decimal yaptık!
-                        description=item["description"],
-                        date=item["date"]
-                    )
-                    #Ürettiğimiz bu nesneyi listemize ekliyoruz
-                    self.all_expenses.append(expense_object)
-
-            print("Done: Old data loaded successfully.")
-
-        except FileNotFoundError: #dosya henüz yoksa boş liste açıyoruz
-            self.all_expenses = []
-            print("Info: No existing data")
-
-        except Exception as e:
-            print(f"Error while loading data: {e}")
-
-
-    def _save_data(self):
-        try:
-            savable_list = [
-                expense.to_dict()
-                for expense in self.all_expenses
-            ]
-
-            with open(self.file_path, "w",encoding="utf-8") as file:
-                json.dump(savable_list, file, ensure_ascii=False, indent=4)
-
-            print(f"Done: Data saved to {self.file_path}")
-
-        except Exception as e:
-            print(f"Error while saving data: {e}")
-
+    def __init__(self):
+        # 1. Veritabanı bağlantı yöneticisini ayağa kaldırıyoruz
+        self.db = DatabaseManager()
 
     def add_expense(self, amount: Decimal, description: str):
         if not description.strip():
-            print("❌ Error: Description cannot be empty.")
+            print("Error: Description cannot be empty.")
             return
 
-        next_id = (
-            max(exp.id for exp in self.all_expenses) + 1
-            if self.all_expenses
-            else 1
-        )
+        today = datetime.now().strftime("%Y-%m-%d")
+        query = "INSERT INTO expenses (amount, description, date) VALUES (%s, %s, %s) RETURNING id;"
 
-        new_expense = Expense(
-            id=next_id,
-            amount=amount,
-            description=description
-        )
+        try:
+            with self.db.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Doğru Sıra: amount, description, date
+                    cursor.execute(query, (amount, description, today))
+                    new_id = cursor.fetchone()[0]
+                    conn.commit()
 
-        self.all_expenses.append(new_expense)
-        self._save_data()
-
-        print(f"Added new expense: {new_expense} (ID: {next_id})")
+            print(f"Added new expense: {description} (${amount:.2f}) (ID: {new_id})")
+        except Exception as e:
+            print(f"Database error while adding expense: {e}")
 
     def update_expense(
-            self,
-            expense_id: int,
-            amount: Decimal = None,
-            description: str = None
+        self,
+        expense_id: int,
+        amount: Decimal = None,
+        description: str = None,
     ):
-        for expense in self.all_expenses:
-            if expense.id == expense_id:
+        if amount is None and description is None:
+            print("Error: Nothing to update. Provide amount or description.")
+            return
 
-                if amount is not None:
-                    if amount <= 0:
-                        print("Amount must be greater than 0.")
-                        return
-                    expense.amount = amount
+        # Dinamik SQL güncelleme sorgusu hazırlama
+        updates = []
+        params = []
 
-                if description is not None:
-                    if not description.strip():
-                        print("Description cannot be empty.")
-                        return
-                    expense.description = description
-
-                self._save_data()
-
-                print(f"Expense with ID {expense_id} updated: {expense}")
+        if amount is not None:
+            if amount <= 0:
+                print("Error: Amount must be greater than 0.")
                 return
+            updates.append("amount = %s")
+            params.append(amount)
 
-        print(f"Expense with ID {expense_id} not found.")
+        if description is not None:
+            if not description.strip():
+                print("Error: Description cannot be empty.")
+                return
+            updates.append("description = %s")
+            params.append(description)
+
+        params.append(expense_id)
+        query = f"UPDATE expenses SET {', '.join(updates)} WHERE id = %s;"
+
+        try:
+            with self.db.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, params)
+                    if cursor.rowcount == 0:
+                        print(f"Expense with ID {expense_id} not found.")
+                    else:
+                        conn.commit()
+                        print(f"Expense with ID {expense_id} updated successfully.")
+        except Exception as e:
+            print(f"Database error while updating expense: {e}")
 
     def delete_expense(self, expense_id: int):
-        for expense in self.all_expenses:
-            if expense.id == expense_id:
-                self.all_expenses.remove(expense)
-                self._save_data()
-                print(f"🗑️ Expense with ID {expense_id} deleted.")
-                return
+        query = "DELETE FROM expenses WHERE id = %s;"
 
-        print(f"Expense with ID {expense_id} not found.")
+        try:
+            with self.db.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, (expense_id,))
+                    if cursor.rowcount == 0:
+                        print(f"Expense with ID {expense_id} not found.")
+                    else:
+                        conn.commit()
+                        print(f"🗑️ Expense with ID {expense_id} deleted successfully.")
+        except Exception as e:
+            print(f"Database error while deleting expense: {e}")
 
     def list_expenses(self):
-        #harcama yok mu kontrolü
-        if not self.all_expenses:
-            print("No expenses found")
-            return
+        query = "SELECT id, date, description, amount FROM expenses ORDER BY id ASC;"
 
-            #5 karakter genişlik sola yasla, 12 karakter genişlik sola yasla...
-        print(f"\n{'ID':<5} {'Date':<12} {'Description':<25} {'Amount'}")
-        print("-" * 55)  # Araya düzgün bir çizgi çekelim
+        try:
+            with self.db.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query)
+                    rows = cursor.fetchall()
 
-        for expense in self.all_expenses:
-            print(
-                f"{expense.id:<5} {expense.date:<12} "
-                f"{expense.description:<25} ${expense.amount:.2f}"
-            )
-        print("-" * 55 + "\n")
-
-    def get_summary(self, month: int = None):
-        total = Decimal("0.00")
-
-        if not self.all_expenses:
-            print(f"Total expense: ${total:.2f}")
-            return
-
-        if month is not None:
-            if not 1 <= month <= 12:
-                print("Error: Month must be between 1 and 12.")
+            if not rows:
+                print("No expenses found.")
                 return
 
-            for expense in self.all_expenses:
-                expense_month = int(expense.date.split("-")[1])
+            print(f"\n{'ID':<5} {'Date':<12} {'Description':<25} {'Amount'}")
+            print("-" * 55)
 
-                if expense_month == month:
-                    total += expense.amount
+            for row in rows:
+                print(f"{row[0]:<5} {str(row[1]):<12} {row[2]:<25} ${row[3]:.2f}")
+            print("-" * 55 + "\n")
 
-            print(f"Month {month} total expense: ${total:.2f}")
+        except Exception as e:
+            print(f"Database error while listing expenses: {e}")
 
+    def get_summary(self, month: int = None):
+        if month is not None and not (1 <= month <= 12):
+            print("Error: Month must be between 1 and 12.")
+            return
+
+        if month:
+            query = "SELECT SUM(amount) FROM expenses WHERE EXTRACT(MONTH FROM date) = %s;"
+            params = (month,)
         else:
-            for expense in self.all_expenses:
-                total += expense.amount
+            query = "SELECT SUM(amount) FROM expenses;"
+            params = ()
 
-            print(f"Total expense: ${total:.2f}")
+        try:
+            with self.db.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, params)
+                    result = cursor.fetchone()[0]
+                    total = Decimal(str(result)) if result is not None else Decimal("0.00")
 
+            if month:
+                print(f"💰 Month {month} total expense: ${total:.2f}")
+            else:
+                print(f"💰 Total expense: ${total:.2f}")
+
+        except Exception as e:
+            print(f"Database error while getting summary: {e}")
 
     def show_welcome(self):
         line = "=" * 60
         welcome_text = f"""{line}
-      Welcome to Expense Tracker
+      Welcome to Expense Tracker (PostgreSQL Edition)
     {line}
-    This application helps you manage your personal expenses.
-
-    You can:
-      • Add new expenses        • View monthly summaries
-      • List all expenses       • Update existing expenses
-      • View total expenses     • Delete expenses
+    This application helps you manage your personal expenses via SQL database.
 
     Available commands:
-      add      Add a new expense
-      list     List all expenses
-      summary  Show total or monthly summary
-      update   Update an expense
-      delete   Delete an expense
+      add       Add a new expense
+      list      List all expenses
+      summary   Show total or monthly summary
+      update    Update an expense
+      delete    Delete an expense
 
     Examples:
       python expense-tracker.py add --description "Coffee" --amount 75
       python expense-tracker.py list
-      python expense-tracker.py summary
       python expense-tracker.py summary --month 7
       python expense-tracker.py update --id 1 --amount 120
       python expense-tracker.py delete --id 1
-
-    Run a command to get started! 
     {line}"""
-
         print(welcome_text)
 
+
 def main():
-    # Kullanıcı terminale parametre girmeden çalıştırmışsa Karşılama Ekranını göster
     if len(sys.argv) == 1:
         manager = ExpenseManager()
         manager.show_welcome()
@@ -220,74 +187,38 @@ def main():
 
     # add
     add_parser = subparsers.add_parser("add", help="Add an expense")
-    add_parser.add_argument("--description", required=True,
-                            help="Description of the expense")
+    add_parser.add_argument("--description", required=True, help="Description of the expense")
     add_parser.add_argument("--amount", required=True, help="Amount")
 
     # list
     subparsers.add_parser("list", help="List all expenses")
 
     # summary
-    summary_parser = subparsers.add_parser(
-        "summary",
-        help="Show total expenses"
-    )
-    summary_parser.add_argument(
-        "--month",
-        type=int,
-        help="Month number (1-12)"
-    )
-    delete_parser = subparsers.add_parser(
-        "delete",
-        help="Delete an expense"
-    )
-    delete_parser.add_argument(
-        "--id",
-        type=int,
-        required=True,
-        help="Expense ID to delete"
-    )
+    summary_parser = subparsers.add_parser("summary", help="Show total expenses")
+    summary_parser.add_argument("--month", type=int, help="Month number (1-12)")
+
+    # delete
+    delete_parser = subparsers.add_parser("delete", help="Delete an expense")
+    delete_parser.add_argument("--id", type=int, required=True, help="Expense ID to delete")
 
     # update
-    update_parser = subparsers.add_parser(
-        "update",
-        help="Update an expense"
-    )
-    update_parser.add_argument(
-        "--id",
-        type=int,
-        required=True,
-        help="Expense ID to update"
-    )
-    update_parser.add_argument(
-        "--amount",
-        help="New amount"
-    )
-    update_parser.add_argument(
-        "--description",
-        help="New description"
-    )
+    update_parser = subparsers.add_parser("update", help="Update an expense")
+    update_parser.add_argument("--id", type=int, required=True, help="Expense ID to update")
+    update_parser.add_argument("--amount", help="New amount")
+    update_parser.add_argument("--description", help="New description")
 
     args = parser.parse_args()
     manager = ExpenseManager()
 
     try:
         if args.command == "add":
-            # Gelen string veriyi sayıya (Decimal) çevirip doğruluyoruz
             amount_dec = Decimal(args.amount)
-
             if amount_dec <= 0:
                 print("Error: The spending amount must be greater than 0.")
                 return
-
-            #Sınıfın metodunu terminalden gelen verilerle çağırıyoruz
-            manager.add_expense(
-                description=args.description,
-                amount=amount_dec
-            )
+            manager.add_expense(description=args.description, amount=amount_dec)
 
         elif args.command == "list":
-            #Listeleme metodunu çağırıyoruz
             manager.list_expenses()
 
         elif args.command == "summary":
@@ -297,19 +228,16 @@ def main():
             manager.delete_expense(args.id)
 
         elif args.command == "update":
-            amount_dec = None
-
-            if args.amount is not None:
-                amount_dec = Decimal(args.amount)
-
+            amount_dec = Decimal(args.amount) if args.amount is not None else None
             manager.update_expense(
                 expense_id=args.id,
                 amount=amount_dec,
-                description=args.description
+                description=args.description,
             )
 
     except InvalidOperation:
-        print("ERROR: Invalid amount! Please enter a number.")
+        print("ERROR: Invalid amount! Please enter a valid number.")
+
 
 if __name__ == "__main__":
     main()
